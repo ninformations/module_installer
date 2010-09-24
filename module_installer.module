@@ -1,0 +1,254 @@
+<?php
+
+//$Id$
+
+/**
+ * @file
+ * Module installer downloads modules using Drupal CVS. This module helps in
+ * installing different versions of modules.
+ */
+
+/**
+ * hook_menu implementation.
+ */
+function module_installer_menu() {
+  return array(
+      'admin/build/modules/installer' => array(
+          'title' => 'Module Installer',
+          'page callback' => 'module_installer',
+          'access arguments' => array('administer site configuration'),
+      ),
+      'module_installer/list' => array(
+          'page callback' => 'module_installer_CVSlist',
+          'access arguments' => array('access content'),
+          'type' => MENU_CALLBACK,
+          'file' => './includes/module.installer.cvs.php'
+      ),
+      'module_installer/module/%' => array(
+          'page callback' => 'module_installer_ModuleVersions',
+          'page arguments' => array(2),
+          'access arguments' => array('access content'),
+          'type' => MENU_CALLBACK,
+          'file' => './includes/module.installer.cvs.php'
+      ),
+      'module_installer/download/%/%/%' => array(
+          'page callback' => 'module_installer_ModuleDownload',
+          'page arguments' => array(2, 3, 4),
+          'access arguments' => array('access content'),
+          'type' => MENU_CALLBACK,
+          'file' => './includes/module.installer.cvs.php'
+      ),
+  );
+}
+
+/**
+ * hook_theme implementation.
+ */
+function module_installer_theme() {
+  return array(
+      'module_installer' => array(
+          'arguments' => array(
+          ),
+      ),
+      'module_installer_UpdateScript' => array(
+          'arguments' => array(
+              'size' => NULL,
+              'element' => NULL,
+          ),
+          'template' => 'module_installer.UpdateScript',
+      ),
+  );
+}
+
+/**
+ * callback function for module_installer page.
+ *
+ * this function shows module installer page. you can search for your module
+ * using `Module Name` input box (autocompletes on typing).
+ *
+ * @return
+ *    HTMLFragment
+ */
+function module_installer() {
+  return theme('module_installer');
+}
+
+/**
+ * theme function for module_installer theme.
+ *
+ * @return
+ *    HTMLFragment.
+ */
+function theme_module_installer() {
+  drupal_add_js(drupal_get_path('module', 'module_installer') . '/javascript/jquery.bgiframe.min.js');
+  drupal_add_js(drupal_get_path('module', 'module_installer') . '/javascript/jquery.autocomplete.js');
+  drupal_add_js(drupal_get_path('module', 'module_installer') . '/javascript/jquery.livequery.js');
+  drupal_add_js(drupal_get_path('module', 'module_installer') . '/javascript/module_installer.js');
+
+  drupal_add_css(drupal_get_path('module', 'module_installer') . '/stylesheet/module_installer.css');
+  drupal_add_css(drupal_get_path('module', 'module_installer') . '/stylesheet/jquery.autocomplete.css');
+
+  $headers = array(t("Module Name"), t("Version"), t("Action"));
+
+  $rows = array(
+      array(
+          '<input type="text" name="module_name" class="module_name" value="Type Module Name"/>',
+          array(
+              'data' => '<div class="ahah-progress-throbber">'
+              . '<div class="throbber">'
+              . t("Please select Module first.")
+              . '</div></div><div class="content"></div>',
+              'class' => 'version-td'
+          ),
+          array(
+              'data' => '<input type="button" name="download" class="download" value="'
+              . t("Download")
+              . '" disabled="disabled"/>',
+              'class' => "module_installer-moduleDownload"
+          ),
+      ),
+  );
+
+  $html = <<<HTML
+<div id="module-installer-page">
+HTML;
+  $html .= theme('table', $headers, $rows, array('id' => 'module-installer-table'));
+  $html .= <<<HTML
+<div id="module-installer-addMore">
+  <input type="button" id="module-intaller-addMoreButton" value="Downloading Modules List..." disabled="disabled"/>
+</div>
+<iframe src="" id="module_installer-drupalPage"></iframe>
+</div>
+HTML;
+  return $html;
+}
+
+/**
+ * Returns list of modules in JSON.
+ *
+ * module_installer_CVSlist function returns array of modules in JSON. If module
+ * list isn't in cache calls cron for caching module list (first time it will take
+ * time as caching will be done by cron).
+ *
+ */
+function module_installer_CVSlist() {
+  if (!variable_get('module_installerModuleList', false)) {
+    module_installer_cron();
+  }
+
+  drupal_json(variable_get('module_installerModuleList', array()));
+  exit;
+}
+
+/**
+ * hook_cron implementation.
+ */
+function module_installer_cron() {
+  require_once "./includes/module.installer.cvs.php";
+  require_once "./includes/filters.array.php";
+  $module_installer = new ModuleInstallerCVS();
+  try {
+    $moduleList = array_values(array_filter($module_installer->getModuleList(), '_valid_drupal_modules_filter'));
+    variable_set('module_installerModuleList', $moduleList);
+  } catch (Exception $e) {
+    watchdog('module_installer#' . $e->getCode(), $e->getMessage(), $e);
+  }
+}
+
+/**
+ * callback function for getting list of versions available for a drupal module.
+ *
+ * returns a JSON containing status and HTML select element containing versions
+ * as options.
+ *
+ * @param $moduleName
+ *    Drupal module name
+ * @return
+ *    JSON Array of list of modules available.
+ */
+function module_installer_ModuleVersions($moduleName) {
+  $module_installer = new ModuleInstallerCVS();
+  try {
+    $module_versions = $module_installer->getModuleVersion($moduleName);
+    $html = <<<HTML
+<select class="module_installer-ModuleVersion">
+HTML;
+    foreach ($module_versions as $key => $value) {
+      $html .= <<<HTML
+<option value="$key">$value</option>
+HTML;
+    }
+    $html .= <<<HTML
+</select>
+HTML;
+    drupal_json(array('status' => true, 'data' => $html));
+  } catch (Exception $e) {
+    watchdog('module_installer#' . $e->getCode(), $e->getMessage(), $e);
+    drupal_json(
+            array(
+                'status' => false,
+                'data' => 'An error occured. Please see <a href="?q=admin/reports/dblog">here</a>'
+            )
+    );
+  }
+  exit;
+}
+
+/**
+ * Callback function for downloading a module.
+ *
+ * This function needs to be called as getScript call (as it takes much time).
+ *
+ * @param $moduleName
+ *    Drupal's CVS module name. matches to projects name.
+ *    eg.,
+ *      admin_menu, views etc.
+ * @param $revision
+ *    version of specified module in CVS. these are coded with - [dashes],
+ *    rather than . [dots].
+ *    eg.,
+ *      for 6.x-3.x-dev this can be DRUPAL-6--3
+ * @param $element
+ *    HTML element ID that will be updated on download event.
+ */
+function module_installer_ModuleDownload($moduleName, $revision, $element) {
+  $module_installer = new ModuleInstallerCVS();
+
+  //@wiki stop buffering output, so that UI update JavaScript can do some
+  //      updates on client side.
+  //@todo we need some server config code to disable gzip compression and other
+  //      geeky buffering in order to update client UI better.
+  ini_set('output_buffering', false);
+  ini_set('implicit_flush', true);
+
+  $module_installer->registerForDownloadEvent("module_installer_ModuleDownloadUpdate", array($element));
+  try {
+    if ($revision == "HEAD") {
+      $module_installer->downloadModule($moduleName);
+    } else {
+      $module_installer->downloadModule($moduleName, $revision);
+    }
+  } catch (Exception $e) {
+    watchdog('module_installer#' . $e->getCode(), $e->getMessage(), $e);
+    
+    //@wiki log error to console.
+    echo "if(typeof console == 'object') console.error(".$e->getMessage().");";
+  }
+  exit;
+}
+
+/**
+ * Helper function to update Client UI for downloaded files.
+ *
+ * @param $size
+ *    downloaded size of the file.
+ * @param $element
+ *    HTML Element that needs to be updated.
+ */
+function module_installer_ModuleDownloadUpdate($size, $element) {
+  ob_end_flush();
+  ob_start();
+  require './module_installer.updatescript.tpl.php';
+  ob_flush();
+  flush();
+}

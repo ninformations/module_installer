@@ -1,0 +1,4 @@
+name = Module Installer
+description = CVS Module Installer
+version = 6.x-0.2
+core = 6.x
